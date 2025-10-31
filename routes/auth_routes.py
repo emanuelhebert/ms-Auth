@@ -3,6 +3,9 @@ from sqlalchemy.orm import Session
 from .. import models, schemas, utils
 from ..database import get_db
 from datetime import datetime, timedelta
+from security.throttling import throttle_request
+from services.password_reset import generate_reset_token, validate_reset_token
+
 
 login_attempts = {}
 
@@ -142,3 +145,28 @@ def get_user_data(Authorization: str = Header(None), db: Session = Depends(get_d
         "doc_number": user.doc_number,
         "loggedin": user.loggedin
     }
+
+@router.get("/me")
+def get_me(current_user=Depends(get_current_user)):
+    throttle_request(str(current_user.id)) 
+    return current_user
+
+@router.post("/forgot-password")
+def forgot_password(email: str, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado")
+    token = generate_reset_token(str(user.id))
+    return {"msg": "Token de recuperação enviado"}
+
+@router.post("/reset-password")
+def reset_password(token: str, new_password: str, db: Session = Depends(get_db)):
+    user_id = validate_reset_token(token)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="Token inválido ou expirado")
+    user = db.query(User).filter(User.id == int(user_id)).first()
+    user.password = hash_password(new_password)
+    db.commit()
+    return {"msg": "Senha alterada com sucesso"}
+
+
